@@ -51,3 +51,10 @@ cmake-build-release
 __pycache__
 *.pyc
 *.pyd
+
+# emacs tag files
+tags/
+GPATH
+GRTAGS
+GTAGS
+TAGS
