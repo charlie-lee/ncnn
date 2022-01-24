@@ -2071,6 +2071,7 @@ int NetOptimize::eliminate_dropout()
             if (layers[j]->tops.size() != 1)
                 continue;
 
+            // find dropout layer's previous layer
             if (layers[j]->tops[0] == bottom_blob_index)
                 break;
         }

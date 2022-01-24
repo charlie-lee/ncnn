@@ -37,6 +37,7 @@ static int detect_squeezenet(const cv::Mat& bgr, std::vector<float>& cls_scores)
     ncnn::Mat in = ncnn::Mat::from_pixels_resize(bgr.data, ncnn::Mat::PIXEL_BGR, bgr.cols, bgr.rows, 227, 227);
 
     const float mean_vals[3] = {104.f, 117.f, 123.f};
+    // x <- (x-m)/n^(-1); m: mean_vals, n: norm_vals (x_norm = (x-mu)/sigma)
     in.substract_mean_normalize(mean_vals, 0);
 
     ncnn::Extractor ex = squeezenet.create_extractor();
