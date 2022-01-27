@@ -121,19 +121,19 @@ int QuantNet::init()
         const ncnn::Layer* layer = layers[i];
         if (layer->type == "Input")
         {
-            input_blobs.push_back(layer->tops[0]);
+            input_blobs.push_back(layer->tops[0]); // add layer index
         }
     }
 
-    // find all conv layers
+    // find all conv layers (conv + conv_dw + fc)
     for (int i = 0; i < (int)layers.size(); i++)
     {
-        const ncnn::Layer* layer = layers[i];
+i        const ncnn::Layer* layer = layers[i];
         if (layer->type == "Convolution" || layer->type == "ConvolutionDepthWise" || layer->type == "InnerProduct")
         {
             conv_layers.push_back(i);
-            conv_bottom_blobs.push_back(layer->bottoms[0]);
-            conv_top_blobs.push_back(layer->tops[0]);
+            conv_bottom_blobs.push_back(layer->bottoms[0]); // input blob
+            conv_top_blobs.push_back(layer->tops[0]); // output blob
         }
     }
 
@@ -258,16 +258,17 @@ int QuantNet::quantize_KL()
     const int conv_bottom_blob_count = (int)conv_bottom_blobs.size();
     const int image_count = (int)listspaths[0].size();
 
-    const int num_histogram_bins = 2048;
+    const int num_histogram_bins = 2048; // same as tensorrt's pseudo code
 
     std::vector<ncnn::UnlockedPoolAllocator> blob_allocators(quantize_num_threads);
     std::vector<ncnn::UnlockedPoolAllocator> workspace_allocators(quantize_num_threads);
 
     // initialize conv weight scales
+    // initialize: use max(|weight|) as threhsold for scale factor computation
     #pragma omp parallel for num_threads(quantize_num_threads)
     for (int i = 0; i < conv_layer_count; i++)
     {
-        const ncnn::Layer* layer = layers[conv_layers[i]];
+        const ncnn::Layer* layer = layers[conv_layers[i]]; // conv/conv_dw/fc
 
         if (layer->type == "Convolution")
         {
@@ -298,9 +299,14 @@ int QuantNet::quantize_KL()
                 float absmax = 0.f;
                 for (int k = 0; k < weight_data_size_output; k++)
                 {
+                    // threshold = absmax
                     absmax = std::max(absmax, (float)fabs(weight_data_n[k]));
                 }
 
+                // w_q = w * s
+                //     = w * (2^b-1) / w_max)
+                //     = (w/w_max) * (2^b-1)
+                // w_q \in [-(2^b-1), 2^b-1]
                 if (quant_6bit)
                 {
                     weight_scales[i][n] = 31 / absmax;
@@ -376,7 +382,7 @@ int QuantNet::quantize_KL()
         ex.set_blob_allocator(&blob_allocators[thread_num]);
         ex.set_workspace_allocator(&workspace_allocators[thread_num]);
 
-        for (int j = 0; j < input_blob_count; j++)
+        for (int j = 0; j < input_blob_count; j++) // num of input blobs
         {
             const int type_to_pixel = type_to_pixels[j];
             const std::vector<float>& mean_vals = means[j];
@@ -395,7 +401,7 @@ int QuantNet::quantize_KL()
             ex.input(input_blobs[j], in);
         }
 
-        for (int j = 0; j < conv_bottom_blob_count; j++)
+        for (int j = 0; j < conv_bottom_blob_count; j++) // num of conv input blobs
         {
             ncnn::Mat out;
             ex.extract(conv_bottom_blobs[j], out);
@@ -417,6 +423,8 @@ int QuantNet::quantize_KL()
 
                 #pragma omp critical
                 {
+                    // update absmax data for each conv layer
+                    // (per-blob/per-layer basis)
                     QuantBlobStat& stat = quant_blob_stats[j];
                     stat.absmax = std::max(stat.absmax, absmax);
                 }
@@ -477,7 +485,7 @@ int QuantNet::quantize_KL()
             {
                 const float absmax = quant_blob_stats[j].absmax;
 
-                std::vector<uint64_t> histogram(num_histogram_bins, 0);
+                std::vector<uint64_t> histogram(num_histogram_bins, 0); // 2048 bins
 
                 const int outc = out.c;
                 const int outsize = out.w * out.h;
@@ -489,6 +497,8 @@ int QuantNet::quantize_KL()
                         if (ptr[k] == 0.f)
                             continue;
 
+                        // bin index computation:
+                        // i = min(|w|/w_max*num_bins, num_bins-1)
                         const int index = std::min((int)(fabs(ptr[k]) / absmax * num_histogram_bins), (num_histogram_bins - 1));
 
                         histogram[index] += 1;
@@ -533,10 +543,12 @@ int QuantNet::quantize_KL()
         int target_threshold = target_bin;
         float min_kl_divergence = FLT_MAX;
 
+        // 128 to 2047, target_bin==128
         for (int threshold = target_bin; threshold < num_histogram_bins; threshold++)
         {
             const float kl_eps = 0.0001f;
 
+            // accumulate bin[threshold] ~ bin[2047] to bin[threshold-1]
             std::vector<float> clip_distribution(threshold, kl_eps);
             {
                 for (int j = 0; j < threshold; j++)
@@ -549,10 +561,12 @@ int QuantNet::quantize_KL()
                 }
             }
 
+            // quantize clip_distribution (distribution Q) into 128 levels
             const float num_per_bin = (float)threshold / target_bin;
 
             std::vector<float> quantize_distribution(target_bin, 0.f);
             {
+                // quantize_distribution[0] case
                 {
                     const float end = num_per_bin;
 
@@ -568,9 +582,10 @@ int QuantNet::quantize_KL()
                     {
                         quantize_distribution[0] += stat.histogram_normed[k];
                     }
-
+                    // normalize
                     quantize_distribution[0] /= right_lower + right_scale;
                 }
+                // quantize_distribution[1] ~ quantize_distribution[126] cases
                 for (int j = 1; j < target_bin - 1; j++)
                 {
                     const float start = j * num_per_bin;
@@ -596,9 +611,10 @@ int QuantNet::quantize_KL()
                     {
                         quantize_distribution[j] += stat.histogram_normed[k];
                     }
-
+                    // normalize
                     quantize_distribution[j] /= right_lower - left_upper + left_scale + right_scale;
                 }
+                // quantize_distribution[127] case
                 {
                     const float start = threshold - num_per_bin;
 
@@ -619,8 +635,11 @@ int QuantNet::quantize_KL()
                 }
             }
 
+            // expand 128-level quantized distribution to `threshold`
+            // ([128, 2047]) bins
             std::vector<float> expand_distribution(threshold, kl_eps);
             {
+                // expand quantize_distribution[0] to first k bins
                 {
                     const float end = num_per_bin;
 
@@ -637,6 +656,7 @@ int QuantNet::quantize_KL()
                         expand_distribution[k] += quantize_distribution[0];
                     }
                 }
+                // expand quantize_distribution[1 ~ 126] to k2 bins
                 for (int j = 1; j < target_bin - 1; j++)
                 {
                     const float start = j * num_per_bin;
@@ -663,6 +683,7 @@ int QuantNet::quantize_KL()
                         expand_distribution[k] += quantize_distribution[j];
                     }
                 }
+                // expand quantize_distribution[127] to k3 bins
                 {
                     const float start = threshold - num_per_bin;
 
