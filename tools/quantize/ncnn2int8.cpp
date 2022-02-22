@@ -180,6 +180,14 @@ int NetQuantize::quantize_convolution()
             ncnn::Option opt_q = opt;
             opt_q.blob_allocator = convolution->weight_data.allocator;
             opt_q.use_packing_layout = false;
+            // core: data_quantized = float2int8(data * scale)
+            // static inline signed char float2int8(float v)
+            // {
+            //     int int32 = static_cast<int>(round(v));
+            //     if (int32 > 127) return 127;
+            //     if (int32 < -127) return -127;
+            //     return (signed char)int32;
+            // }
             ncnn::quantize_to_int8(weight_data_r2, weight_data_int8, weight_data_int8_scales, opt_q);
             if (weight_data_int8.empty())
                 return -100;
@@ -317,6 +325,7 @@ int NetQuantize::fuse_requantize()
     const size_t layer_count = layers.size();
     for (size_t i = 0; i < layer_count; i++)
     {
+        // only for conv or depthwise conv layers
         if (layers[i]->type != "Convolution" && layers[i]->type != "ConvolutionDepthWise")
             continue;
 
@@ -458,7 +467,7 @@ int NetQuantize::fuse_requantize()
             }
         }
 
-        if (!all_conv)
+        if (!all_conv) // split layers must all be conv/depthwise conv layers
             continue;
 
         j = blobs[split->tops[0]].consumer;

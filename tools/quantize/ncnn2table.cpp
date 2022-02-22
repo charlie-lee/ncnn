@@ -904,7 +904,7 @@ int QuantNet::quantize_ACIQ()
                 {
                     QuantBlobStat& stat = quant_blob_stats[j];
                     stat.absmax = std::max(stat.absmax, absmax);
-                    stat.total = outc * outsize;
+                    stat.total = outc * outsize; // number of weights per tensor
                 }
             }
         }

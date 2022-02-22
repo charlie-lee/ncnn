@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## 20220222
+- add comments on ncnntable & ncnn2int8 tool
+
 ## 20220127
 - add comments on ncnntable tool (`quantize_KL()`)
 
