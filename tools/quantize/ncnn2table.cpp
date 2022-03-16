@@ -128,12 +128,12 @@ int QuantNet::init()
     // find all conv layers (conv + conv_dw + fc)
     for (int i = 0; i < (int)layers.size(); i++)
     {
-i        const ncnn::Layer* layer = layers[i];
+        i const ncnn::Layer* layer = layers[i];
         if (layer->type == "Convolution" || layer->type == "ConvolutionDepthWise" || layer->type == "InnerProduct")
         {
             conv_layers.push_back(i);
             conv_bottom_blobs.push_back(layer->bottoms[0]); // input blob
-            conv_top_blobs.push_back(layer->tops[0]); // output blob
+            conv_top_blobs.push_back(layer->tops[0]);       // output blob
         }
     }
 
